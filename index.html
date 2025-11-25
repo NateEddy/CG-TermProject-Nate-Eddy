@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>WebGL Doodle Jump</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        #score {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 24px;
+            font-family: Arial, sans-serif;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+<div id="score">Score: 0</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r152/three.min.js"></script>
+
+<script>
+/***********************
+ *  BASIC SETUP
+ **********************/
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87cefa); // sky blue
+
+const camera = new THREE.PerspectiveCamera(
+    75, window.innerWidth / window.innerHeight, 0.1, 1000
+);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+/***********************
+ * LIGHTING
+ **********************/
+const light = new THREE.DirectionalLight(0xffffff, 1);
+light.position.set(0, 10, 5);
+scene.add(light);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+
+/***********************
+ * PLAYER
+ **********************/
+const playerGeo = new THREE.BoxGeometry(1, 1, 1);
+const playerMat = new THREE.MeshPhongMaterial({ color: 0x00ff00 });
+const player = new THREE.Mesh(playerGeo, playerMat);
+player.position.y = 5;
+scene.add(player);
+
+let vy = 0;
+const gravity = -0.01;
+const jumpStrength = 0.25;
+
+/***********************
+ * PLATFORMS
+ **********************/
+let platforms = [];
+
+function createPlatform(x, y) {
+    const geo = new THREE.BoxGeometry(3, 0.4, 2);
+    const mat = new THREE.MeshPhongMaterial({ color: 0x8888ff });
+    const platform = new THREE.Mesh(geo, mat);
+    platform.position.set(x, y, 0);
+    scene.add(platform);
+    return platform;
+}
+
+// initial platforms
+for (let i = 0; i < 10; i++) {
+    platforms.push(createPlatform((Math.random() - 0.5) * 6, i * 3));
+}
+
+/***********************
+ * INPUT
+ **********************/
+let moveLeft = false;
+let moveRight = false;
+
+document.addEventListener("keydown", e => {
+    if (e.key === "ArrowLeft" || e.key === "a") moveLeft = true;
+    if (e.key === "ArrowRight" || e.key === "d") moveRight = true;
+});
+
+document.addEventListener("keyup", e => {
+    if (e.key === "ArrowLeft" || e.key === "a") moveLeft = false;
+    if (e.key === "ArrowRight" || e.key === "d") moveRight = false;
+});
+
+/***********************
+ * SCORE
+ **********************/
+let maxHeight = 0;
+const scoreEl = document.getElementById("score");
+
+/***********************
+ * GAME LOOP
+ **********************/
+function updatePlayer() {
+    // Move left/right
+    if (moveLeft)  player.position.x -= 0.07;
+    if (moveRight) player.position.x += 0.07;
+
+    // Gravity
+    vy += gravity;
+    player.position.y += vy;
+
+    // Wrap around (Doodle Jump style)
+    if (player.position.x > 5)  player.position.x = -5;
+    if (player.position.x < -5) player.position.x = 5;
+
+    // Collision with platforms
+    platforms.forEach(p => {
+        const onLeftRight = Math.abs(player.position.x - p.position.x) < 1.7;
+        const closeVert  = Math.abs(player.position.y - (p.position.y + 0.7)) < 0.3;
+
+        // Must be falling to hit platform
+        if (vy < 0 && onLeftRight && closeVert) {
+            vy = jumpStrength;
+        }
+    });
+
+    // Update score
+    if (player.position.y > maxHeight) {
+        maxHeight = player.position.y;
+        scoreEl.textContent = "Score: " + Math.floor(maxHeight);
+    }
+}
+
+function generatePlatforms() {
+    // Keep generating platforms as player climbs
+    const highestPlatformY = Math.max(...platforms.map(p => p.position.y));
+
+    if (player.position.y + 15 > highestPlatformY) {
+        const newY = highestPlatformY + 3;
+        const newX = (Math.random() - 0.5) * 6;
+        platforms.push(createPlatform(newX, newY));
+    }
+
+    // Remove platforms below the camera for performance
+    platforms = platforms.filter(p => {
+        if (p.position.y < player.position.y - 20) {
+            scene.remove(p);
+            return false;
+        }
+        return true;
+    });
+}
+
+function updateCamera() {
+    camera.position.y = player.position.y + 5;
+    camera.position.z = 8;
+    camera.lookAt(player.position.x, player.position.y, 0);
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+
+    updatePlayer();
+    generatePlatforms();
+    updateCamera();
+
+    renderer.render(scene, camera);
+}
+
+animate();
+
+/***********************
+ * WINDOW RESIZE
+ **********************/
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+
+</body>
+</html>
