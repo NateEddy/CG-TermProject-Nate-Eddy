@@ -63,9 +63,9 @@ scene.add(light);
 scene.add(new THREE.AmbientLight(0xffffff, 0.6));
 
 
-const playerGeo = new THREE.BoxGeometry(1, 1, 1);
+const playerGeometry = new THREE.BoxGeometry(1, 1, 1);
 const playerMat = new THREE.MeshPhongMaterial({ color: 0x00ff00 });
-const player = new THREE.Mesh(playerGeo, playerMat);
+const player = new THREE.Mesh(playerGeometry, playerMat);
 player.position.y = 5;
 scene.add(player);
 
@@ -229,13 +229,13 @@ async function loadTopGhost() {
 function createGhostPlayer() {
     if (ghostPlayer) scene.remove(ghostPlayer);
     
-    const ghostGeo = new THREE.BoxGeometry(1, 1, 1);
+    const ghost = new THREE.BoxGeometry(1, 1, 1);
     const ghostMat = new THREE.MeshPhongMaterial({ 
         color: 0xffffff, 
         transparent: true, 
         opacity: 0.5 
     });
-    ghostPlayer = new THREE.Mesh(ghostGeo, ghostMat);
+    ghostPlayer = new THREE.Mesh(ghost, ghostMat);
     ghostPlayer.ghostFrame = 0;
     scene.add(ghostPlayer);
 }
