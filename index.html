@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>WebGL Doodle Jump</title>
+    <title>Scribble Jump</title>
     <style>
         body { margin: 0; overflow: hidden; }
         #score {
@@ -14,19 +14,38 @@
             font-family: Arial, sans-serif;
             z-index: 10;
         }
+        #serverStatus {
+            position: absolute;
+            top: 40px;
+            left: 10px;
+            color: #ffdd57;
+            font-size: 14px;
+            font-family: Arial, sans-serif;
+            z-index: 10;
+        }
+        #topScore {
+            position: absolute;
+            top: 70px;
+            left: 10px;
+            color: #ffffff;
+            font-size: 14px;
+            font-family: Arial, sans-serif;
+            z-index: 10;
+        }
+        
     </style>
 </head>
 <body>
 <div id="score">Score: 0</div>
+<div id="serverStatus">Server: checking...</div>
+<div id="topScore">Top Ghost: —</div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r152/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
 <script>
-/***********************
- *  BASIC SETUP
- **********************/
+
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87cefa); // sky blue
+scene.background = new THREE.Color(0x87cefa);
 
 const camera = new THREE.PerspectiveCamera(
     75, window.innerWidth / window.innerHeight, 0.1, 1000
@@ -36,32 +55,47 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
-/***********************
- * LIGHTING
- **********************/
+
 const light = new THREE.DirectionalLight(0xffffff, 1);
 light.position.set(0, 10, 5);
 scene.add(light);
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.6));
 
-/***********************
- * PLAYER
- **********************/
+
 const playerGeo = new THREE.BoxGeometry(1, 1, 1);
 const playerMat = new THREE.MeshPhongMaterial({ color: 0x00ff00 });
 const player = new THREE.Mesh(playerGeo, playerMat);
 player.position.y = 5;
 scene.add(player);
 
+const faceGroup = new THREE.Group();
+const leftEyeGeo = new THREE.SphereGeometry(0.15, 8, 8);
+const eyeMat = new THREE.MeshPhongMaterial({ color: 0x000000 });
+const leftEye = new THREE.Mesh(leftEyeGeo, eyeMat);
+leftEye.position.set(-0.25, 0.2, 0.55);
+faceGroup.add(leftEye);
+const rightEye = new THREE.Mesh(leftEyeGeo, eyeMat);
+rightEye.position.set(0.25, 0.2, 0.55);
+faceGroup.add(rightEye);
+
+for (let i = 0; i < 5; i++) {
+    const mouthSphere = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 8), eyeMat);
+    const x = (i - 2) * 0.15;
+    const y = -0.1 - (0.15 - Math.abs(i - 2) * 0.05) * 0.4;
+    mouthSphere.position.set(x, y, 0.55);
+    faceGroup.add(mouthSphere);
+}
+player.add(faceGroup);
+faceGroup.visible = true;
+
 let vy = 0;
 const gravity = -0.01;
 const jumpStrength = 0.25;
 
-/***********************
- * PLATFORMS
- **********************/
 let platforms = [];
+
+let enemies = [];
 
 function createPlatform(x, y) {
     const geo = new THREE.BoxGeometry(3, 0.4, 2);
@@ -72,20 +106,30 @@ function createPlatform(x, y) {
     return platform;
 }
 
-// initial platforms
-for (let i = 0; i < 10; i++) {
-    platforms.push(createPlatform((Math.random() - 0.5) * 6, i * 3));
+function createEnemy(x, y) {
+    const geo = new THREE.SphereGeometry(0.5, 16, 16);
+    const mat = new THREE.MeshPhongMaterial({ color: 0xff4444 });
+    const enemy = new THREE.Mesh(geo, mat);
+    enemy.position.set(x, y + 0.7, 0);  
+    enemy.platformY = y; 
+    enemy.spawnX = x;
+    enemy.velocity = Math.random() < 0.5 ? -0.12 : 0.12;  
+    scene.add(enemy);
+    return enemy;
 }
 
-/***********************
- * INPUT
- **********************/
+for (let i = 0; i < 10; i++) {
+    platforms.push(createPlatform((Math.random() - 0.5) * 4, i * 3));
+}
+
+
 let moveLeft = false;
 let moveRight = false;
 
 document.addEventListener("keydown", e => {
     if (e.key === "ArrowLeft" || e.key === "a") moveLeft = true;
     if (e.key === "ArrowRight" || e.key === "d") moveRight = true;
+    if (e.key === "r" || e.key === "R") resetGame();
 });
 
 document.addEventListener("keyup", e => {
@@ -93,57 +137,274 @@ document.addEventListener("keyup", e => {
     if (e.key === "ArrowRight" || e.key === "d") moveRight = false;
 });
 
-/***********************
- * SCORE
- **********************/
 let maxHeight = 0;
+let gameOver = false;
+let gameOverStartY = 0;  
+let cameraLocked = false;   
+let isFrowning = false; 
 const scoreEl = document.getElementById("score");
+
+let ghostData = [];
+let topGhost = null;
+let ghostPlayer = null;
+const SERVER_URL = '';
+console.log('Using SERVER_URL (relative) for API requests');
+
+let serverAvailable = false;
+const serverStatusEl = document.getElementById('serverStatus');
+const topScoreEl = document.getElementById('topScore');
+
+async function checkServerAvailability() {
+    try {
+        const res = await fetch(`${SERVER_URL}/api/ghosts/top`, { cache: 'no-store' });
+        if (res.ok) {
+            if (!serverAvailable) {
+                console.log('Backend reachable. Loading top ghost...');
+                serverAvailable = true;
+                serverStatusEl.textContent = 'Server: online';
+                await loadTopGhost();
+            }
+            return true;
+        }
+    } catch (err) {
+    }
+    serverAvailable = false;
+    serverStatusEl.textContent = 'Server: offline';
+    return false;
+}
+
+setInterval(checkServerAvailability, 5000);
+checkServerAvailability();
+
+
+function toggleSmile() {
+    while (faceGroup.children.length > 2) {
+        faceGroup.remove(faceGroup.children[2]);
+    }
+    
+    for (let i = 0; i < 5; i++) {
+        const mouthSphere = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 8), eyeMat);
+        const x = (i - 2) * 0.15;
+        const y = -0.1 - (0.15 - Math.abs(i - 2) * 0.05) * 0.4;
+        mouthSphere.position.set(x, y, 0.55);
+        faceGroup.add(mouthSphere);
+    }
+    isFrowning = true;
+}
+
+function toggleFrown() {
+    while (faceGroup.children.length > 2) {
+        faceGroup.remove(faceGroup.children[2]);
+    }
+    
+    for (let i = 0; i < 5; i++) {
+        const mouthSphere = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 8), eyeMat);
+        const x = (i - 2) * 0.15;
+        const y = -0.1 + (0.15 - Math.abs(i - 2) * 0.05) * 0.4;
+        mouthSphere.position.set(x, y, 0.55);
+        faceGroup.add(mouthSphere);
+    }
+    isFrowning = false;
+}
+
+async function loadTopGhost() {
+    try {
+        const response = await fetch(`${SERVER_URL}/api/ghosts/top`);
+        const result = await response.json();
+        if (result.success && result.ghost) {
+            topGhost = result.ghost;
+            console.log('Loaded top ghost with score:', topGhost.score);
+            createGhostPlayer();
+            if (topScoreEl) topScoreEl.textContent = 'Top Ghost: ' + topGhost.score;
+        }
+        else {
+            topGhost = null;
+            if (topScoreEl) topScoreEl.textContent = 'Top Ghost: —';
+        }
+    } catch (error) {
+        console.log('Could not load ghost (server may not be running):', error);
+    }
+}
+
+function createGhostPlayer() {
+    if (ghostPlayer) scene.remove(ghostPlayer);
+    
+    const ghostGeo = new THREE.BoxGeometry(1, 1, 1);
+    const ghostMat = new THREE.MeshPhongMaterial({ 
+        color: 0xffffff, 
+        transparent: true, 
+        opacity: 0.5 
+    });
+    ghostPlayer = new THREE.Mesh(ghostGeo, ghostMat);
+    ghostPlayer.ghostFrame = 0;
+    scene.add(ghostPlayer);
+}
+
+async function saveGhost() {
+        if (ghostData.length === 0 || maxHeight < 1) return;
+    
+    try {
+        const response = await fetch(`${SERVER_URL}/api/ghosts/save`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ghostData: ghostData,
+                score: Math.floor(maxHeight),
+                timestamp: new Date().toISOString()
+            })
+        });
+        const result = await response.json();
+        if (result.success) {
+            console.log('Ghost saved! Reloading top ghost...');
+            await loadTopGhost();
+        } else {
+            console.log('Failed to save ghost:', result.message);
+        }
+    } catch (error) {
+        console.log('Error saving ghost:', error);
+    }
+}
+
+function updateGhostPlayback() {
+    if (!topGhost || !ghostPlayer) return;
+    
+    const frameData = topGhost.data[ghostPlayer.ghostFrame];
+    if (frameData) {
+        ghostPlayer.position.set(frameData.x, frameData.y, frameData.z);
+        ghostPlayer.ghostFrame++;
+    } else {
+        ghostPlayer.ghostFrame = 0;
+    }
+}
+
+/***********************
+ * RESET GAME
+ **********************/
+function resetGame() {
+    if (!gameOver) return;
+
+    player.position.set(0, 5, 0);
+    vy = 0;
+
+    toggleSmile();
+
+    
+    maxHeight = 0;
+    scoreEl.textContent = "Score: 0";
+    gameOver = false;
+    cameraLocked = false;
+    ghostData = [];
+
+    platforms.forEach(p => scene.remove(p));
+    platforms = [];
+
+    enemies.forEach(e => scene.remove(e));
+    enemies = [];
+
+    for (let i = 0; i < 10; i++) {
+        platforms.push(createPlatform((Math.random() - 0.5) * 4, i * 3));
+    }
+    
+    loadTopGhost();
+}
 
 /***********************
  * GAME LOOP
  **********************/
 function updatePlayer() {
-    // Move left/right
+    if (gameOver && !cameraLocked) return;
+    
+    if (gameOver && cameraLocked) {
+        vy += gravity;
+        player.position.y += vy;
+        
+        if (player.position.y < -10) {
+            cameraLocked = false;
+            scoreEl.textContent = "Game Over! Final Score: " + Math.floor(maxHeight);
+            saveGhost();
+        }
+        return;
+    }
+
     if (moveLeft)  player.position.x -= 0.07;
     if (moveRight) player.position.x += 0.07;
 
-    // Gravity
     vy += gravity;
     player.position.y += vy;
 
-    // Wrap around (Doodle Jump style)
     if (player.position.x > 5)  player.position.x = -5;
     if (player.position.x < -5) player.position.x = 5;
 
-    // Collision with platforms
+    if (player.position.y < -10) {
+        gameOver = true;
+        scoreEl.textContent = "Game Over! Final Score: " + Math.floor(maxHeight);
+        return;
+    }
+
+    ghostData.push({
+        x: player.position.x,
+        y: player.position.y,
+        z: player.position.z
+    });
+
     platforms.forEach(p => {
         const onLeftRight = Math.abs(player.position.x - p.position.x) < 1.7;
         const closeVert  = Math.abs(player.position.y - (p.position.y + 0.7)) < 0.3;
 
-        // Must be falling to hit platform
+        
         if (vy < 0 && onLeftRight && closeVert) {
             vy = jumpStrength;
         }
     });
 
-    // Update score
-    if (player.position.y > maxHeight) {
-        maxHeight = player.position.y;
+    enemies.forEach(e => {
+        const distToEnemy = Math.sqrt(
+            Math.pow(player.position.x - e.position.x, 2) +
+            Math.pow(player.position.y - e.position.y, 2)
+        );
+        
+        if (distToEnemy < 1.5) {
+            gameOver = true;
+            cameraLocked = true;
+            gameOverStartY = player.position.y;
+            vy = 0;
+            toggleFrown();
+            saveGhost();
+        }
+    });
+
+    const currentHeight = Math.max(0, player.position.y - 5);
+    if (currentHeight > maxHeight) {
+        maxHeight = currentHeight;
         scoreEl.textContent = "Score: " + Math.floor(maxHeight);
     }
 }
 
 function generatePlatforms() {
-    // Keep generating platforms as player climbs
     const highestPlatformY = Math.max(...platforms.map(p => p.position.y));
 
     if (player.position.y + 15 > highestPlatformY) {
         const newY = highestPlatformY + 3;
-        const newX = (Math.random() - 0.5) * 6;
+        const newX = (Math.random() - 0.5) * 4;
         platforms.push(createPlatform(newX, newY));
+
+        if (Math.random() < 0.2) {
+            const enemyX = (Math.random() - 0.5) * 4;
+            const randomYOffset = (Math.random() - 0.5) * 6;  
+            enemies.push(createEnemy(enemyX, newY + randomYOffset));
+        }
     }
 
-    // Remove platforms below the camera for performance
+    enemies.forEach(e => {
+        e.position.x += e.velocity;
+        if (e.position.x - e.spawnX > 5) {
+            e.velocity = -Math.abs(e.velocity);
+        }
+        if (e.position.x - e.spawnX < -5) {
+            e.velocity = Math.abs(e.velocity);
+        }
+    });
+
     platforms = platforms.filter(p => {
         if (p.position.y < player.position.y - 20) {
             scene.remove(p);
@@ -151,12 +412,26 @@ function generatePlatforms() {
         }
         return true;
     });
+
+    enemies = enemies.filter(e => {
+        if (e.position.y < player.position.y - 20) {
+            scene.remove(e);
+            return false;
+        }
+        return true;
+    });
 }
 
 function updateCamera() {
-    camera.position.y = player.position.y + 5;
-    camera.position.z = 8;
-    camera.lookAt(player.position.x, player.position.y, 0);
+    if (cameraLocked) {
+        camera.position.y = gameOverStartY + 5;
+        camera.position.z = 8;
+        camera.lookAt(player.position.x, gameOverStartY, 0);
+    } else {
+        camera.position.y = player.position.y + 5;
+        camera.position.z = 8;
+        camera.lookAt(player.position.x, player.position.y, 0);
+    }
 }
 
 function animate() {
@@ -164,6 +439,7 @@ function animate() {
 
     updatePlayer();
     generatePlatforms();
+    updateGhostPlayback();
     updateCamera();
 
     renderer.render(scene, camera);
@@ -171,9 +447,7 @@ function animate() {
 
 animate();
 
-/***********************
- * WINDOW RESIZE
- **********************/
+
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
